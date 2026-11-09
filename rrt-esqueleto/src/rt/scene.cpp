@@ -22,20 +22,12 @@ glm::vec3 Scene::background(const Ray& r) const
 
 glm::vec3 Scene::normal_color(const Ray& r) const
 {
-    // TODO (paso 3): normales como color.
-    // Buscar la intersección más cercana (find_nearest); si no hay, devolver
-    // el color del fondo. Si hay, ajustar el valor de la normal de [-1,1] a
-    // [0,1] para cada componente y devolverla como color.
-    // El resultado se puede ver con:  ./bin/rrt -n
     Hit h;
-    if(find_nearest(r,h) ){
-        return 0.5f * (glm::vec3(1.0f)+h.n);
-    }
-    else{
+    if( !find_nearest(r, h) ){
         return background(r);
     }
-    
-    return background(r);
+    // De [-1,1] a [0,1], componente a componente
+    return 0.5f * (h.n + glm::vec3(1.0f));
 }
 
 LocalTerms Scene::local_terms(const Ray& r, const Hit& h) const
@@ -46,19 +38,7 @@ LocalTerms Scene::local_terms(const Ray& r, const Hit& h) const
     const glm::vec3 v = glm::normalize(-r.d());     // hacia el observador
     const glm::vec3& n = h.n;                       // ya orientada hacia v
 
-    // TODO (paso 4): modelo de iluminación de Phong.
-
-    // Por defecto cada objeto sale de un color sólido tomado de la componente
-    // difusa del material (kd).
-    // Eliminar esta línea al escribir el paso 4:
-    //terms.diffuse = m.kd_at(h.p);
-
-    // TODO (paso 4) Ambiente: ka en el punto (ka_at, no ka: una textura la
-    // puede hacer variar)
-    // terms.ambient = ...
-
-    // Término ambiente: la luz "de relleno" que no depende de ninguna fuente.
-    // Se usa ka_at para que una textura (p. ej. el tablero) pueda variarlo.
+    // Ambiente: ka en el punto (un tablero lo hace variar)
     terms.ambient = m.ka_at(h.p);
 
     for( const auto& L : lights_ ){
@@ -72,23 +52,20 @@ LocalTerms Scene::local_terms(const Ray& r, const Hit& h) const
             continue;
         }
 
-        // coseno del ángulo entre la normal y la dirección a la luz
-        const float ndotl = glm::max(glm::dot(n, s), 0.0f);
+        // Difuso
+        const float k_diff = glm::max(glm::dot(n, s), 0.0f);
 
-        // Intensidad que llega del foco: color, atenuación por distancia y
-        // fracción no bloqueada por objetos (sombra).
-        const glm::vec3 intensity =
-            L.color() * L.attenuation(dist) * visibility;
+        // Especular, Phong (sin brillo si la luz está detrás de la superficie)
+        const glm::vec3 refl = glm::reflect(-s, n);
+        const float k_spec = (k_diff > 0.0f)
+                ? glm::pow(glm::max(glm::dot(refl, v), 0.0f), m.shininess)
+                : 0.0f;
 
-        // Difuso (Lambert): no depende del observador.
-        terms.diffuse += m.kd_at(h.p) * ndotl * intensity;
+        // Intensidad que llega del foco
+        const glm::vec3 Li = L.color() * (L.attenuation(dist) * visibility);
 
-        // Especular (Phong): sólo si la luz está delante de la superficie.
-        if( ndotl > 0.0f ){
-            const glm::vec3 R = glm::reflect(-s, n);   // s reflejada en n
-            const float rdotv = glm::max(glm::dot(R, v), 0.0f);
-            terms.specular += m.ks * glm::pow(rdotv, m.shininess) * intensity;
-        }
+        terms.diffuse  += m.kd_at(h.p) * k_diff * Li;
+        terms.specular += m.ks * k_spec * Li;
     }
 
     return terms;
@@ -97,42 +74,62 @@ LocalTerms Scene::local_terms(const Ray& r, const Hit& h) const
 float Scene::light_transmission(const glm::vec3& p, const glm::vec3& n,
                                 const glm::vec3& light_pos) const
 {
-    // TODO (paso 5): sombras.
-    // Lanzar un rayo de sombra desde p hacia la luz. Si toca algún objeto
-    // antes de llegar a la luz, el punto está en sombra (devolver 0); si no,
-    // le llega toda la luz (devolver 1).
-    //   - Correr el origen un poco hacia afuera, p + n * EPSILON. Si no, el
-    //     rayo choca con la propia superficie por redondeo y aparecen puntos
-    //     negros sueltos (el "acné" de sombra).
-    //   - Un objeto que está más allá de la luz no hace sombra: comparar el t
-    //     de la intersección con la distancia a la luz.
+    constexpr int kMaxCrossings = 16;
 
-    // --- Implementación (paso 5) ---
-    // Origen corrido un poco sobre la normal para no chocar con la propia
-    // superficie por error de redondeo (evita el "acné" de sombra).
-    const glm::vec3 origin = p + n * EPSILON;
-    glm::vec3 to_light = light_pos - origin;
-    const float dist = glm::length(to_light);
-    to_light /= dist;
+    // El origen se corre un poco hacia afuera para que el rayo de sombra no
+    // choque con la propia superficie por redondeo
+    glm::vec3 origin = p + n * EPSILON;
+    float transmission = 1.0f;
 
-    const Ray shadow(origin, to_light);
+    // El rayo de sombra avanza hacia la luz; cada superficie que cruza deja
+    // pasar shadow_transmission() de la luz (0 si es opaca)
+    for( int i = 0; i < kMaxCrossings; ++i ){
+        const glm::vec3 to_light = light_pos - origin;
+        const float dist = glm::length(to_light);
+        const glm::vec3 s = to_light / dist;
 
-    Hit blocker;
-    // Si hay algo antes de llegar a la luz, el punto queda en sombra.
-    if( find_nearest(shadow, blocker) && blocker.t < dist ){
-        return 0.0f;
+        // Termina si no hay ningún objeto entre el punto y la luz. Un objeto
+        // que está más allá de la luz no cuenta
+        Hit h;
+        if( !find_nearest(Ray(origin, s), h) || h.t >= dist - EPSILON ){
+            return transmission;
+        }
+
+        transmission *= h.mat->shadow_transmission();
+        if( transmission <= 0.0f ){
+            return 0.0f;
+        }
+        origin = h.p + s * EPSILON;
     }
-    return 1.0f;
+    return transmission;
 }
 
-glm::vec3 Scene::trace(const Ray& r) const
+glm::vec3 Scene::trace(const Ray& r, unsigned int depth) const
 {
+    // Rama truncada: no aporta luz
+    if( depth > max_depth_ ){
+        return glm::vec3(0.0f);
+    }
+
     Hit h;
     if( !find_nearest(r, h) ){
         return background(r);
     }
+    const Material& m = *h.mat;
+
+    // I = I_local + suma de (peso_i * I(rayo_i))
+    //
     // La escena calcula los términos de Phong con sombras (local_terms) y el
     // material elige cuáles usa. La llamada es virtual: trace no necesita
     // saber qué material tiene el objeto
-    return h.mat->local(*this, r, h);
+    glm::vec3 color = m.local(*this, r, h);
+
+    Secondary sec[2];
+    const int count = m.secondary(r, h, sec);
+    for( int i = 0; i < count; ++i ){
+        color += sec[i].weight * trace(sec[i].ray, depth + 1U);
+    }
+
+    // Sin recortar a [0,1]: el recorte va al final, en el píxel
+    return color;
 }

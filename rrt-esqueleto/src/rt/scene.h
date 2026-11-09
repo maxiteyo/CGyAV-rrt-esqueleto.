@@ -25,8 +25,12 @@ public:
         bg_horizon_ = horizon; bg_zenith_ = zenith;
     }
 
-    /// Color que obtiene el rayo r de la escena
-    glm::vec3 trace(const Ray& r) const;
+    /// Tope de la recursión: los rayos de profundidad mayor no aportan luz
+    void set_max_depth(unsigned int d)          { max_depth_ = d; }
+
+    /// Color que obtiene el rayo r de la escena. depth: cuántos rebotes lleva
+    /// (0 = rayo primario)
+    glm::vec3 trace(const Ray& r, unsigned int depth = 0U) const;
 
     /// Vista de control: la normal en el primer punto que toca el rayo, pasada
     /// del rango [-1,1] a [0,1] para poder visualizarla como un color (x rojo,
@@ -42,6 +46,7 @@ private:
     std::vector<Light> lights_;
     glm::vec3 bg_horizon_ = glm::vec3(0.0f);
     glm::vec3 bg_zenith_  = glm::vec3(0.0f);
+    unsigned int max_depth_ = 8U;
 
     bool find_nearest(const Ray& r, Hit& closest) const;
     glm::vec3 background(const Ray& r) const;
