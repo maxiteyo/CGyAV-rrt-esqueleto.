@@ -22,6 +22,8 @@ void build_scene_03(Scene& scene, Camera& camera);
 void build_scene_04(Scene& scene, Camera& camera);
 void build_scene_05(Scene& scene, Camera& camera);
 void build_scene_06(Scene& scene, Camera& camera);
+void build_scene_07(Scene& scene, Camera& camera);
+void build_scene_08(Scene& scene, Camera& camera);
 
 
 /// Tabla de escenas disponibles (escenas.cpp). Para agregar una: escribir su
